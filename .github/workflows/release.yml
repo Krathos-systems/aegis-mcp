@@ -1,8 +1,16 @@
 name: release
 
 # Pushing a v* tag builds every target and publishes a GitHub release with the
-# binaries, SHA256SUMS and the tag's CHANGELOG.md section as notes. A tag with
-# a hyphen (v0.1.0-alpha.1) is published as a pre-release.
+# binaries, both installers, SHA256SUMS and the tag's CHANGELOG.md section as
+# notes, and pushes the container image to ghcr.io/krathos-systems/aegis-mcp.
+#
+# From 1.0, a tag with a hyphen (v1.1.0-beta.1) is published as a pre-release.
+# Before 1.0 every release is a normal one, alphas included: GitHub's
+# releases/latest/download/ link, which the one-line installer uses, skips
+# pre-releases, so marking alphas would break installation.
+#
+# Until 1.0 the image's `latest` tag follows every release, pre-releases
+# included, so docker-compose.yml works during the alpha.
 on:
   push:
     tags: ['v*']
@@ -15,6 +23,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -57,7 +66,8 @@ jobs:
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -buildvcs=false \
               -ldflags "-s -w -X main.version=${TAG}" -o "dist/aegis-mcp-${os}-${arch}${ext}" .
           done
-          (cd dist && sha256sum aegis-mcp-* > SHA256SUMS)
+          cp install.sh install.ps1 dist/
+          (cd dist && sha256sum aegis-mcp-* install.sh install.ps1 > SHA256SUMS)
           ls -l dist
 
       - name: Leak check
@@ -66,6 +76,25 @@ jobs:
           LEAK_CHECK_REQUIRED: '1'   # a release never ships unchecked
         run: scripts/leak-check.sh dist/* "$RUNNER_TEMP/notes.md"
 
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Container image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ steps.tag.outputs.tag }}
+          push: true
+          tags: |
+            ghcr.io/krathos-systems/aegis-mcp:${{ steps.tag.outputs.tag }}
+            ghcr.io/krathos-systems/aegis-mcp:latest
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -73,7 +102,10 @@ jobs:
         run: |
           set -eu
           pre=""
-          case "$TAG" in *-*) pre="--prerelease" ;; esac
+          case "$TAG" in
+            v0.*) ;;                      # see the note at the top
+            *-*) pre="--prerelease" ;;
+          esac
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
             gh release upload "$TAG" dist/* --clobber

@@ -14,7 +14,7 @@ DOCKER_RUN = docker run --rm -u $$(id -u):$$(id -g) \
 LDFLAGS = -s -w -X main.version=$(VERSION)
 TARGETS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
-.PHONY: tidy fmt fmt-fix vet test cover cover-html check build dist clean
+.PHONY: tidy fmt fmt-fix vet test cover cover-html check build dist test-install image clean
 
 ## tidy: resolve dependencies and write go.sum
 tidy:
@@ -62,6 +62,14 @@ dist:
 			-ldflags "$(LDFLAGS)" -o dist/aegis-mcp-$$os-$$arch$$ext .; \
 	done'
 	cd dist && sha256sum aegis-mcp-* > SHA256SUMS
+
+## test-install: test install.sh against a fake release built from this checkout
+test-install: dist
+	scripts/test-install.sh dist
+
+## image: build the Docker image as aegis-mcp:dev
+image:
+	docker build --build-arg VERSION=$(VERSION) -t aegis-mcp:dev .
 
 ## clean: remove build output
 clean:

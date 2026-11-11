@@ -14,16 +14,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
       # Patterns live in a secret, which pull requests from forks don't receive;
       # the check then prints a notice and passes. Releases always require it.
       - name: Leak check (tracked files)
         env:
           LEAK_PATTERNS: ${{ secrets.LEAK_PATTERNS }}
         run: git ls-files -z | xargs -0 scripts/leak-check.sh
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
       - name: gofmt
         run: |
@@ -41,3 +41,48 @@ jobs:
           for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             CGO_ENABLED=0 GOOS="${t%/*}" GOARCH="${t#*/}" go build -trimpath -o /dev/null .
           done
+
+  # install.sh on the two systems it supports.
+  install-sh:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build this machine's release asset
+        run: |
+          mkdir -p dist
+          asset="aegis-mcp-$(go env GOOS)-$(go env GOARCH)"
+          CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=v0.0.0-ci" -o "dist/$asset" .
+          cd dist && { command -v sha256sum >/dev/null && sha256sum "$asset" || shasum -a 256 "$asset"; } > SHA256SUMS
+      - run: scripts/test-install.sh dist
+
+  install-ps1:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: go build -trimpath -ldflags "-X main.version=v0.0.0-ci" -o aegis-mcp.exe .
+      - name: Test install.ps1
+        shell: pwsh
+        run: ./scripts/test-install.ps1 -Binary ./aegis-mcp.exe
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build --build-arg VERSION=v0.0.0-ci -t aegis-mcp:ci .
+      - name: It runs, and stdout carries only the protocol
+        run: |
+          [ "$(docker run --rm aegis-mcp:ci --version)" = v0.0.0-ci ]
+          reply="$( (printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}'; sleep 2) |
+            docker run -i --rm -e AEGIS_SERVER=https://aegis.example.com -e AEGIS_TOKEN=x aegis-mcp:ci)"
+          echo "$reply" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d["result"]["serverInfo"]["name"]=="aegis", d'
