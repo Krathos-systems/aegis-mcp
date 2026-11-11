@@ -10,51 +10,65 @@ An [MCP](https://modelcontextprotocol.io) server for [Aegis](https://aegis.krath
 
 ## Install
 
-Download the binary for your platform from the [latest release](https://github.com/Krathos-systems/aegis-mcp/releases), check it against `SHA256SUMS`, and put it on your `PATH`:
+**macOS and Linux**
+
+```bash
+curl -fsSL https://github.com/Krathos-systems/aegis-mcp/releases/latest/download/install.sh | sh
+```
+
+**Windows** (PowerShell)
+
+```powershell
+irm https://github.com/Krathos-systems/aegis-mcp/releases/latest/download/install.ps1 | iex
+```
+
+That's the whole install. The script downloads `aegis-mcp` for your system, checks it against the release's `SHA256SUMS`, and puts it in `~/.local/bin` (Windows: `%LOCALAPPDATA%\Programs\aegis-mcp`, added to your PATH). It never needs `sudo` or an administrator prompt. Then it runs `aegis-mcp setup`, which:
+
+1. asks for your Aegis address and an admin token (the token is not shown as you type),
+2. checks them with Aegis, so a typo is caught now rather than in your AI client,
+3. saves them in a file only you can read,
+4. adds the server to Claude Code if you have it, and prints the config for any other MCP client.
+
+Run `aegis-mcp setup` again at any time, for example with a new token.
+
+Installer options, as environment variables: `AEGIS_MCP_VERSION=v0.1.0` installs a specific release, `AEGIS_MCP_INSTALL_DIR` picks the directory, and `AEGIS_MCP_NO_SETUP=1` skips setup. With `AEGIS_SERVER` and `AEGIS_TOKEN` set, setup runs without questions, which suits scripts and provisioning.
+
+### Docker
+
+The image is `ghcr.io/krathos-systems/aegis-mcp`. With [docker-compose.yml](docker-compose.yml):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Krathos-systems/aegis-mcp/main/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/Krathos-systems/aegis-mcp/main/aegis-mcp.env.example -o aegis-mcp.env
+chmod 600 aegis-mcp.env        # then put your address and token in it
+claude mcp add aegis -- docker compose -f "$PWD/docker-compose.yml" run --rm -T aegis-mcp
+```
+
+Your AI client starts a fresh container for each session. For other clients, use `docker` as the command with the arguments `compose -f /full/path/to/docker-compose.yml run --rm -T aegis-mcp`. Without compose: `docker run -i --rm --env-file aegis-mcp.env ghcr.io/krathos-systems/aegis-mcp`. If Aegis runs on the same machine, use `http://host.docker.internal` as its address.
+
+### By hand
+
+Download your platform's binary and `SHA256SUMS` from the [latest release](https://github.com/Krathos-systems/aegis-mcp/releases), then:
 
 ```bash
 sha256sum --check --ignore-missing SHA256SUMS
 install -m 755 aegis-mcp-linux-amd64 ~/.local/bin/aegis-mcp
-aegis-mcp --version
+aegis-mcp setup
 ```
 
-## Configure
+## Configuration
+
+`aegis-mcp setup` saves your address and token to `aegis-mcp/config.json` in your user config directory (`~/.config` on Linux, `~/Library/Application Support` on macOS, `%AppData%` on Windows). These environment variables take precedence over it, which is how the Docker setup works:
 
 | Variable | |
 |---|---|
-| `AEGIS_SERVER` | Your Aegis address, e.g. `https://acme.example.com`. Required. |
-| `AEGIS_TOKEN_FILE` | A file holding your Aegis admin token. Recommended. |
-| `AEGIS_TOKEN` | The token itself, instead of a file. |
-| `AEGIS_READ_ONLY` | `true` to offer only the tools that read. Same as `--read-only`. |
+| `AEGIS_SERVER` | Your Aegis address, e.g. `https://acme.example.com` |
+| `AEGIS_TOKEN` | Your Aegis admin token |
+| `AEGIS_TOKEN_FILE` | A file holding the token, instead of `AEGIS_TOKEN` |
+| `AEGIS_READ_ONLY` | `true` to offer only the tools that read (same as `--read-only`) |
+| `AEGIS_MCP_CONFIG` | Use a different config file |
 
-The token is never accepted as a command-line flag, because other users on the machine can see a process's arguments. Keep the token file private (`chmod 600`).
-
-### Claude Code
-
-```bash
-claude mcp add aegis \
-  -e AEGIS_SERVER=https://acme.example.com \
-  -e AEGIS_TOKEN_FILE="$HOME/.config/aegis/mcp-token" \
-  -- aegis-mcp
-```
-
-### Other clients
-
-Any MCP client that can start a stdio server works. The usual JSON form:
-
-```json
-{
-  "mcpServers": {
-    "aegis": {
-      "command": "aegis-mcp",
-      "env": {
-        "AEGIS_SERVER": "https://acme.example.com",
-        "AEGIS_TOKEN_FILE": "/path/to/mcp-token"
-      }
-    }
-  }
-}
-```
+The token is never accepted as a command-line flag, because other users on the machine can see a process's arguments.
 
 ## Tools
 
@@ -81,11 +95,13 @@ make check                    # gofmt, go vet, tests with the 100% coverage gate
 make test TEST=TestCleanPath  # run some tests
 make build                    # ./aegis-mcp for linux/amd64
 make dist VERSION=v0.1.0      # every platform into dist/, with SHA256SUMS
+make test-install             # the installer tests, against a fake local release
+make image                    # the Docker image, as aegis-mcp:dev
 ```
 
 ## Releases
 
-Versions are git tags (`vMAJOR.MINOR.PATCH`, with `-alpha.N` or `-beta.N` for pre-releases). Pushing a tag builds every platform and publishes a GitHub release. The tag's section of [CHANGELOG.md](CHANGELOG.md) becomes the release notes, so add it before tagging.
+Versions are git tags (`vMAJOR.MINOR.PATCH`, with `-alpha.N` or `-beta.N` for pre-releases; before 1.0 these are published as ordinary releases so the installer finds them). Pushing a tag builds every platform, publishes a GitHub release with the binaries and installers, and pushes the Docker image. The tag's section of [CHANGELOG.md](CHANGELOG.md) becomes the release notes, so add it before tagging.
 
 ## License
 
