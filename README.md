@@ -49,7 +49,7 @@ Any MCP client that can start a stdio server works. The usual JSON form:
       "command": "aegis-mcp",
       "env": {
         "AEGIS_SERVER": "https://acme.example.com",
-        "AEGIS_TOKEN_FILE": "/home/you/.config/aegis/mcp-token"
+        "AEGIS_TOKEN_FILE": "/path/to/mcp-token"
       }
     }
   }
