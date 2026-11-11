@@ -1,0 +1,10 @@
+# Go module and build caches used by the Docker-wrapped toolchain (Makefile)
+/.gocache/
+
+# Build output
+/aegis-mcp
+/aegis-mcp.exe
+/dist/
+
+# Private notes for Claude Code: pointers that must not be published
+/CLAUDE.local.md
