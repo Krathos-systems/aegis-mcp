@@ -86,3 +86,7 @@ make dist VERSION=v0.1.0      # every platform into dist/, with SHA256SUMS
 ## Releases
 
 Versions are git tags (`vMAJOR.MINOR.PATCH`, with `-alpha.N` or `-beta.N` for pre-releases). Pushing a tag builds every platform and publishes a GitHub release. The tag's section of [CHANGELOG.md](CHANGELOG.md) becomes the release notes, so add it before tagging.
+
+## License
+
+[Apache License 2.0](LICENSE).
