@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Patterns live in a secret, which pull requests from forks don't receive;
+      # the check then prints a notice and passes. Releases always require it.
+      - name: Leak check (tracked files)
+        env:
+          LEAK_PATTERNS: ${{ secrets.LEAK_PATTERNS }}
+        run: git ls-files -z | xargs -0 scripts/leak-check.sh
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l *.go internal)"
+          if [ -n "$out" ]; then echo "not gofmt-clean:"; echo "$out"; exit 1; fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Tests with the 100% coverage gate
+        run: scripts/coverage.sh coverage.out
+
+      - name: Build every release target
+        run: |
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            CGO_ENABLED=0 GOOS="${t%/*}" GOARCH="${t#*/}" go build -trimpath -o /dev/null .
+          done

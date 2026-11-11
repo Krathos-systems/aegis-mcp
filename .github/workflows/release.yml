@@ -1,0 +1,82 @@
+name: release
+
+# Pushing a v* tag builds every target and publishes a GitHub release with the
+# binaries, SHA256SUMS and the tag's CHANGELOG.md section as notes. A tag with
+# a hyphen (v0.1.0-alpha.1) is published as a pre-release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish (e.g. v0.1.0-alpha.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      # First, so a tag without a CHANGELOG.md entry stops before anything is built.
+      - name: Release notes
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: scripts/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check
+        run: |
+          out="$(gofmt -l *.go internal)"
+          if [ -n "$out" ]; then echo "not gofmt-clean:"; echo "$out"; exit 1; fi
+          go vet ./...
+          scripts/coverage.sh coverage.out
+
+      - name: Build
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -eu
+          mkdir -p dist
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os="${t%/*}"; arch="${t#*/}"; ext=""
+            [ "$os" = windows ] && ext=.exe
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -buildvcs=false \
+              -ldflags "-s -w -X main.version=${TAG}" -o "dist/aegis-mcp-${os}-${arch}${ext}" .
+          done
+          (cd dist && sha256sum aegis-mcp-* > SHA256SUMS)
+          ls -l dist
+
+      - name: Leak check
+        env:
+          LEAK_PATTERNS: ${{ secrets.LEAK_PATTERNS }}
+          LEAK_CHECK_REQUIRED: '1'   # a release never ships unchecked
+        run: scripts/leak-check.sh dist/* "$RUNNER_TEMP/notes.md"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -eu
+          pre=""
+          case "$TAG" in *-*) pre="--prerelease" ;; esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" $pre --verify-tag
+          fi
