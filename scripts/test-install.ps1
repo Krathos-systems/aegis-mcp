@@ -4,7 +4,7 @@
 #   <path> is an aegis-mcp binary for this machine. It is published in the fake
 #   release under the Windows asset name, so on Linux or macOS the same script
 #   tests everything but the Windows-only PATH handling.
-# Needs python3 (or python) for the local web servers.
+# Needs python3 (or python) for the local web servers (scripts/test-server.py).
 param([Parameter(Mandatory)] [string] $Binary)
 $ErrorActionPreference = 'Stop'
 
@@ -18,19 +18,21 @@ $procs = @()
 function Fail($msg) { throw "FAIL: $msg" }
 function Pass($msg) { Write-Host "ok: $msg" }
 
-# Start a background process; -WindowStyle exists only on Windows.
-function Start-Bg([string[]] $argv) {
-    $opts = @{ FilePath = $python; ArgumentList = $argv; PassThru = $true }
-    if ($IsWindows) { $opts.WindowStyle = 'Hidden' }
+# Start scripts/test-server.py and return its URL once it has answered.
+function Start-Server($name, $mode, $dir) {
+    $portFile = Join-Path $work "$name.port"
+    $opts = @{ FilePath = $python; ArgumentList = @((Join-Path $PSScriptRoot 'test-server.py'), $mode, $dir, $portFile); PassThru = $true }
+    if ($IsWindows) { $opts.WindowStyle = 'Hidden' }   # -WindowStyle exists only on Windows
     $script:procs += Start-Process @opts
-}
-
-function Serve($dir, $port) {
-    Start-Bg @('-m', 'http.server', '--bind', '127.0.0.1', '--directory', $dir, "$port")
-    for ($i = 0; $i -lt 50; $i++) {
-        try { Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$port/" | Out-Null; return } catch { Start-Sleep -Milliseconds 100 }
+    for ($i = 0; -not (Test-Path $portFile); $i++) {
+        if ($i -ge 100) { Fail "$name server did not start" }
+        Start-Sleep -Milliseconds 100
     }
-    Fail "web server on $port did not start"
+    $url = "http://127.0.0.1:$((Get-Content -Raw $portFile).Trim())"
+    # Any HTTP answer (a 401 from the fake Aegis included) means it is serving.
+    try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 "$url/" | Out-Null }
+    catch { if (-not $_.Exception.Response) { Fail "$name server does not answer: $_" } }
+    return $url
 }
 
 # Run install.ps1 in a fresh PowerShell with only the given variables set.
@@ -60,26 +62,12 @@ try {
     $hash = (Get-FileHash -Algorithm SHA256 (Join-Path $good $asset)).Hash.ToLower()
     Set-Content -NoNewline -Path (Join-Path $good 'SHA256SUMS') -Value "$hash  $asset`n"
     Set-Content -NoNewline -Path (Join-Path $bad 'SHA256SUMS') -Value ("0" + $hash.Substring(1) + "  $asset`n")
-    Serve (Join-Path $work 'good') 18771
-    Serve (Join-Path $work 'bad') 18772
-
-    $aegis = Join-Path $work 'aegis.py'
-    Set-Content -Path $aegis -Value @'
-import http.server
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        ok = self.headers.get("Authorization") == "Bearer good"
-        self.send_response(200 if ok else 401)
-        self.end_headers()
-        self.wfile.write(b'{"name":"ada","level":"editor"}' if ok else b'{"error":"no"}')
-    def log_message(self, *a): pass
-http.server.HTTPServer(("127.0.0.1", 18773), H).serve_forever()
-'@
-    Start-Bg @($aegis)
-    Start-Sleep -Seconds 1
+    $goodUrl = Start-Server 'good' 'files' (Join-Path $work 'good')
+    $badUrl = Start-Server 'bad' 'files' (Join-Path $work 'bad')
+    $aegisUrl = Start-Server 'aegis' 'aegis' '-'
 
     # 1. Install only.
-    $r = Install @{ AEGIS_MCP_RELEASES_URL = 'http://127.0.0.1:18771'; AEGIS_MCP_NO_SETUP = '1' }
+    $r = Install @{ AEGIS_MCP_RELEASES_URL = $goodUrl; AEGIS_MCP_NO_SETUP = '1' }
     if ($r.Code -ne 0 -or $r.Out -notmatch 'Checksum verified' -or $r.Out -notmatch "aegis-mcp setup") { Fail "install: $($r.Out)" }
     $installed = Join-Path $work 'bin/aegis-mcp.exe'
     if (-not (Test-Path $installed)) { Fail 'binary not installed' }
@@ -95,14 +83,14 @@ http.server.HTTPServer(("127.0.0.1", 18773), H).serve_forever()
 
     # 2. A damaged download is refused.
     Remove-Item $installed
-    $r = Install @{ AEGIS_MCP_RELEASES_URL = 'http://127.0.0.1:18772'; AEGIS_MCP_NO_SETUP = '1' }
+    $r = Install @{ AEGIS_MCP_RELEASES_URL = $badUrl; AEGIS_MCP_NO_SETUP = '1' }
     if ($r.Code -eq 0 -or $r.Out -notmatch 'Checksum mismatch') { Fail "bad checksum accepted: $($r.Out)" }
     if (Test-Path $installed) { Fail 'binary installed despite a bad checksum' }
     Pass 'refuses a download that does not match SHA256SUMS'
 
     # 3. Scripted setup.
-    $r = Install @{ AEGIS_MCP_RELEASES_URL = 'http://127.0.0.1:18771'; AEGIS_SERVER = 'http://127.0.0.1:18773'; AEGIS_TOKEN = 'good' }
-    if ($r.Code -ne 0 -or $r.Out -notmatch 'Signed in to http://127.0.0.1:18773 as ada') { Fail "scripted setup: $($r.Out)" }
+    $r = Install @{ AEGIS_MCP_RELEASES_URL = $goodUrl; AEGIS_SERVER = $aegisUrl; AEGIS_TOKEN = 'good' }
+    if ($r.Code -ne 0 -or $r.Out -notmatch "Signed in to $([regex]::Escape($aegisUrl)) as ada") { Fail "scripted setup: $($r.Out)" }
     if ((Get-Content -Raw (Join-Path $work 'config.json')) -notmatch '"token": "good"') { Fail 'config file not written' }
     Pass 'runs setup without questions when AEGIS_SERVER and AEGIS_TOKEN are set'
 
