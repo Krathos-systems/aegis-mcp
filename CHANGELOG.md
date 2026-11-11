@@ -3,7 +3,7 @@
 Each release has a section headed `## <tag> — <date>`. The release workflow
 publishes that section as the release notes and refuses a tag without one.
 
-## v0.1.0-alpha.1 — unreleased
+## v0.1.0-alpha.1 — 2026-11-11
 
 First alpha. Needs an Aegis server that accepts admin tokens.
 
