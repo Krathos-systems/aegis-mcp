@@ -11,13 +11,21 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
+// env returns a getenv for m. The config file always points at a path that
+// does not exist, so no test reads the real one.
 func env(m map[string]string) func(string) string {
-	return func(k string) string { return m[k] }
+	return func(k string) string {
+		if k == "AEGIS_MCP_CONFIG" && m[k] == "" {
+			return "/nonexistent/aegis-mcp/config.json"
+		}
+		return m[k]
+	}
 }
 
 // nopWriteCloser adapts a buffer to the io.WriteCloser run wants.
@@ -51,7 +59,7 @@ func TestHelpAndBadFlag(t *testing.T) {
 
 func TestMissingConfig(t *testing.T) {
 	code, out, errw := runWith(t, nil, map[string]string{"AEGIS_TOKEN": "x"})
-	if code != 1 || out != "" || !strings.Contains(errw, "AEGIS_SERVER is not set") {
+	if code != 1 || out != "" || !strings.Contains(errw, "aegis-mcp setup") {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errw)
 	}
 }
@@ -134,7 +142,7 @@ func TestWarningsGoToStderr(t *testing.T) {
 	var out, errw bytes.Buffer
 	code := run(ctx, nil, io.NopCloser(strings.NewReader("")), nopWriteCloser{&out}, &errw,
 		env(map[string]string{"AEGIS_SERVER": "http://aegis.example.com", "AEGIS_TOKEN": "tok"}))
-	if code != 0 || out.Len() != 0 || !strings.Contains(errw.String(), "warning: AEGIS_SERVER uses http://") {
+	if code != 0 || out.Len() != 0 || !strings.Contains(errw.String(), "uses http://, so the token travels unencrypted") {
 		t.Fatalf("code=%d out=%q err=%q", code, out.String(), errw.String())
 	}
 }
@@ -175,11 +183,95 @@ func TestMainProcess(t *testing.T) {
 	for _, c := range cases {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestMainProcess$")
 		cmd.Env = append(os.Environ(), "AEGIS_MCP_RUN_MAIN=1", "AEGIS_MCP_ARGS="+c.args,
-			"AEGIS_SERVER=", "AEGIS_TOKEN=", "AEGIS_TOKEN_FILE=")
+			"AEGIS_SERVER=", "AEGIS_TOKEN=", "AEGIS_TOKEN_FILE=",
+			"AEGIS_MCP_CONFIG=/nonexistent/aegis-mcp/config.json")
 		out, _ := cmd.Output()
 		code := cmd.ProcessState.ExitCode()
 		if code != c.code || (c.out != "" && strings.TrimSpace(string(out)) != c.out) {
 			t.Errorf("args %q: exit %d out %q; want exit %d", c.args, code, out, c.code)
 		}
+	}
+}
+
+// ---- aegis-mcp setup ----
+
+func setupAegis(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer good" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		io.WriteString(w, `{"name":"ada","level":"editor"}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestSetupThenServe(t *testing.T) {
+	url := setupAegis(t)
+	cfg := filepath.Join(t.TempDir(), "config.json")
+	e := map[string]string{"AEGIS_MCP_CONFIG": cfg}
+
+	var out, errw bytes.Buffer
+	code := run(t.Context(), []string{"setup", "--server", url, "--token-stdin", "--no-client"},
+		io.NopCloser(strings.NewReader("good\n")), nopWriteCloser{&out}, &errw, env(e))
+	if code != 0 || !strings.Contains(out.String(), "as ada (editor)") {
+		t.Fatalf("setup: code=%d out=%q err=%q", code, out.String(), errw.String())
+	}
+
+	// The server now starts from the saved file with no environment at all.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	out.Reset()
+	errw.Reset()
+	if code := run(ctx, nil, io.NopCloser(strings.NewReader("")), nopWriteCloser{&out}, &errw, env(e)); code != 0 {
+		t.Fatalf("serve from saved config: code=%d err=%q", code, errw.String())
+	}
+}
+
+func TestSetupFailures(t *testing.T) {
+	url := setupAegis(t)
+	cfg := filepath.Join(t.TempDir(), "config.json")
+	cases := []struct {
+		name  string
+		args  []string
+		input string
+		code  int
+		want  string
+	}{
+		{"help", []string{"setup", "-h"}, "", 0, "-token-stdin"},
+		{"bad flag", []string{"setup", "--nope"}, "", 2, ""},
+		{"rejected token", []string{"setup", "--server", url, "--token-stdin", "--no-client"}, "bad", 1, "did not accept"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var out, errw bytes.Buffer
+			code := run(t.Context(), c.args, io.NopCloser(strings.NewReader(c.input)), nopWriteCloser{&out}, &errw,
+				env(map[string]string{"AEGIS_MCP_CONFIG": cfg}))
+			if code != c.code || !strings.Contains(errw.String(), c.want) {
+				t.Fatalf("code=%d err=%q", code, errw.String())
+			}
+		})
+	}
+}
+
+func TestSetupWithoutConfigDirOrExecutable(t *testing.T) {
+	oldPath, oldExe := configPath, executable
+	t.Cleanup(func() { configPath, executable = oldPath, oldExe })
+
+	configPath = func(func(string) string) (string, error) { return "", errors.New("no home directory") }
+	var errw bytes.Buffer
+	if code := run(t.Context(), []string{"setup"}, io.NopCloser(strings.NewReader("")), nopWriteCloser{io.Discard}, &errw, env(nil)); code != 1 ||
+		!strings.Contains(errw.String(), "no place to save") {
+		t.Fatalf("code=%d err=%q", code, errw.String())
+	}
+
+	configPath = oldPath
+	executable = func() (string, error) { return "", errors.New("no /proc") }
+	errw.Reset()
+	if code := run(t.Context(), []string{"setup"}, io.NopCloser(strings.NewReader("")), nopWriteCloser{io.Discard}, &errw, env(nil)); code != 1 ||
+		!strings.Contains(errw.String(), "cannot tell where") {
+		t.Fatalf("code=%d err=%q", code, errw.String())
 	}
 }

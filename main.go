@@ -18,6 +18,7 @@ import (
 
 	"github.com/Krathos-systems/aegis-mcp/internal/aegis"
 	"github.com/Krathos-systems/aegis-mcp/internal/config"
+	"github.com/Krathos-systems/aegis-mcp/internal/setup"
 	"github.com/Krathos-systems/aegis-mcp/internal/tools"
 )
 
@@ -35,6 +36,10 @@ func main() {
 // run is the whole program. in and out carry the MCP protocol; errw is for
 // people. It returns the process exit code.
 func run(ctx context.Context, args []string, in io.ReadCloser, out io.WriteCloser, errw io.Writer, getenv func(string) string) int {
+	if len(args) > 0 && args[0] == "setup" {
+		return runSetup(ctx, args[1:], in, out, errw, getenv)
+	}
+
 	fs := flag.NewFlagSet("aegis-mcp", flag.ContinueOnError)
 	fs.SetOutput(errw)
 	showVersion := fs.Bool("version", false, "print the version and exit")
@@ -42,8 +47,11 @@ func run(ctx context.Context, args []string, in io.ReadCloser, out io.WriteClose
 	fs.Usage = func() {
 		fmt.Fprintf(errw, `aegis-mcp %s: an MCP server for Aegis, over stdio.
 
-Environment:
-  AEGIS_SERVER      your Aegis address, e.g. https://acme.example.com (required)
+  aegis-mcp setup   connect to Aegis and register with your AI clients
+  aegis-mcp         run the server (your AI client does this)
+
+The server uses what setup saved, unless these are set:
+  AEGIS_SERVER      your Aegis address, e.g. https://acme.example.com
   AEGIS_TOKEN       an Aegis admin token, or
   AEGIS_TOKEN_FILE  a file holding one
   AEGIS_READ_ONLY   true to offer only tools that read
@@ -82,6 +90,56 @@ Flags:
 
 	if err := server.Run(ctx, &mcp.IOTransport{Reader: in, Writer: out}); err != nil && ctx.Err() == nil {
 		fmt.Fprintln(errw, "aegis-mcp:", err)
+		return 1
+	}
+	return 0
+}
+
+// Replaceable in tests.
+var (
+	executable = os.Executable
+	configPath = config.Path
+)
+
+// runSetup is `aegis-mcp setup`. It talks to a person, so it prints to out.
+func runSetup(ctx context.Context, args []string, in io.Reader, out io.Writer, errw io.Writer, getenv func(string) string) int {
+	fs := flag.NewFlagSet("aegis-mcp setup", flag.ContinueOnError)
+	fs.SetOutput(errw)
+	server := fs.String("server", "", "your Aegis address (asked for if not given)")
+	tokenStdin := fs.Bool("token-stdin", false, "read the token from stdin instead of asking")
+	noClient := fs.Bool("no-client", false, "do not register with AI clients")
+	fs.Usage = func() {
+		fmt.Fprintf(errw, "aegis-mcp setup: connect to Aegis and register with your AI clients.\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+
+	path, err := configPath(getenv)
+	if err != nil {
+		fmt.Fprintln(errw, "aegis-mcp setup: no place to save the settings:", err)
+		return 1
+	}
+	self, err := executable()
+	if err != nil {
+		fmt.Fprintln(errw, "aegis-mcp setup: cannot tell where aegis-mcp is installed:", err)
+		return 1
+	}
+
+	err = setup.Run(ctx, setup.Options{
+		Server:     *server,
+		TokenStdin: *tokenStdin,
+		NoClient:   *noClient,
+		ConfigPath: path,
+		Self:       self,
+		Version:    version,
+	}, in, out)
+	if err != nil {
+		fmt.Fprintln(errw, "aegis-mcp setup:", err)
 		return 1
 	}
 	return 0
