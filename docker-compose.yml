@@ -1,0 +1,22 @@
+# Run aegis-mcp in Docker.
+#
+#   1. cp aegis-mcp.env.example aegis-mcp.env   # then fill it in
+#      chmod 600 aegis-mcp.env
+#   2. Point your AI client at this file, e.g. for Claude Code:
+#      claude mcp add aegis -- docker compose -f /full/path/to/docker-compose.yml run --rm -T aegis-mcp
+#
+# The client starts a fresh container for each session and talks to it over
+# stdin/stdout; `-T` keeps a TTY from mangling that stream.
+
+services:
+  aegis-mcp:
+    image: ghcr.io/krathos-systems/aegis-mcp:${AEGIS_MCP_TAG:-latest}
+    build: .            # `docker compose build` builds it from this checkout instead
+    env_file: aegis-mcp.env
+    stdin_open: true
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Lets AEGIS_SERVER=http://host.docker.internal reach an Aegis on this machine.
+    extra_hosts: ["host.docker.internal:host-gateway"]

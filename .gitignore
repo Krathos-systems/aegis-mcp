@@ -8,3 +8,6 @@
 
 # Private notes for Claude Code: pointers that must not be published
 /CLAUDE.local.md
+
+# Local settings for docker-compose.yml (holds the token)
+/aegis-mcp.env
