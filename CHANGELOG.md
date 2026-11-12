@@ -3,6 +3,10 @@
 Each release has a section headed `## <tag> — <date>`. The release workflow
 publishes that section as the release notes and refuses a tag without one.
 
+## v0.1.0-alpha.3 — 2026-11-12
+
+- New tools `aegis_list_teams_and_roles` and `aegis_create_team_or_role`, and prompts `add-team` and `add-role`. The model checks for an existing or similar name, asks what the team or role is for, and moves guidance that belongs there instead of copying it. Assigning people stays in the Aegis admin UI, and the model says so.
+
 ## v0.1.0-alpha.2 — 2026-11-12
 
 - Works with Aegis API tokens. Make one on your account page under **API tokens**.

@@ -43,7 +43,8 @@ internal/config       env + config file → Config; NormalizeServer; the config 
 internal/setup        `setup`: ask, check with GET /admin/me, save, register with Claude Code
 internal/aegis        the only HTTP code: Client.Do, StatusError, file/admin endpoint wrappers
 internal/tools        MCP tool definitions, handlers, explain(), the Instructions string,
-                      compose.go (aegis_compose_context) and prompts.go (the MCP prompts)
+                      compose.go (aegis_compose_context), layers.go (teams and roles)
+                      and prompts.go (the MCP prompts)
 install.sh/.ps1       one-line installers, published as release assets
 Dockerfile, docker-compose.yml, aegis-mcp.env.example
 ```
@@ -63,7 +64,8 @@ Dockerfile, docker-compose.yml, aegis-mcp.env.example
 - **Docker.** `FROM scratch`: the static binary, CA certificates, UID 65532. It must run with stdin attached and **no TTY** (`docker run -i`, `compose run -T`), or the TTY mangles the JSON stream. Compose reads `aegis-mcp.env` (git-ignored) and maps `host.docker.internal` to the host.
 - **`tools.Instructions`** is the model's map of Aegis, and its placement ladder decides which layer a rule goes in. If Aegis's layout, waterfall or variable rules change, update it. A wrong rule there produces wrong edits. It is context the model carries all session, so keep it short.
 - **Keeping delivered context short.** Aegis concatenates a repository's `./CLAUDE.md` from repo ⊕ each team ⊕ role ⊕ role-in-repo ⊕ person (`people/<name>/`), with `<!-- aegis:… -->` markers; global is a separate `~/.claude/CLAUDE.md`. `aegis_compose_context` mirrors that order client-side because no token-reachable route composes teams and person. If Aegis's composition changes, change `compose.go`. It also calls `GET /repos`: an unregistered slug gets only a notice from Aegis, so the result says `registered: false` with a note rather than implying the sections are delivered. The budgets (200 repository / 100 global lines) are constants there and are quoted in the instructions.
-- **Prompts** (`prompts.go`) are the user-started workflows: `add-repo`, `add-guidance`, `health-check`. They refer to the ladder and the subagent review step in `Instructions` by name, so change both together. Write prompts are left out in read-only mode, like the write tools. Nothing is installed into the client's own config; the reviewer is a subagent the model starts with a brief from the instructions.
+- **Teams and roles** (`layers.go`) have no registry a token can write: one exists once its layer holds a file, which is how the admin UI creates them too. `aegis_create_team_or_role` writes the first `CLAUDE.md` under the UI's name rule and refuses an existing one. Assigning people is administrator-only (`/users`, `/principals`), so every result carries `assignNote`.
+- **Prompts** (`prompts.go`) are the user-started workflows: `add-repo`, `add-guidance`, `add-team`, `add-role`, `health-check`. They refer to the ladder and the subagent review step in `Instructions` by name, so change both together. Write prompts are left out in read-only mode, like the write tools. Nothing is installed into the client's own config; the reviewer is a subagent the model starts with a brief from the instructions.
 
 ## The Aegis contract: admin API tokens
 

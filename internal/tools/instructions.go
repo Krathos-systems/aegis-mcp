@@ -20,7 +20,8 @@ How Aegis delivers (content plane, <layer>/claude/…):
 - A repository's ./CLAUDE.md is ONE file Aegis concatenates, in order: repos/<repo>, each of the developer's teams/<team>, their roles/<role>, repos/<repo>/roles/<role>, then people/<name>. Write each layer knowing it is read next to the others.
 - Skills (<layer>/claude/skills/<name>/SKILL.md) and agents (<layer>/claude/agents/<name>.md) cost only their description until used. A more specific layer's same-named entry replaces the broader one.
 - config plane: <layer>/claude/settings.json and mcp.json, resolved global → role → repo → role-in-repo; each layer overrides only the keys it names. Teams and people have no config.
-- A developer has one role and one or more teams. <repo> is a slug from aegis_list_repos; teams and roles are the names under teams/ and roles/ in aegis_list_files.
+- A developer has one role and one or more teams. <repo> is a slug from aegis_list_repos; aegis_list_teams_and_roles lists the teams and roles.
+- A team or role exists once its layer has a file: create one with aegis_create_team_or_role, after checking no similar name exists. Only an administrator, in the Aegis admin UI, decides who holds it, so a new one reaches nobody until then. Tell the user.
 
 Where guidance goes. Take the first answer that fits:
 1. Does it need writing? If Claude would find it in the repository (code, README, manifests, linter config) or already does it right, write nothing.

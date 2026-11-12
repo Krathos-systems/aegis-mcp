@@ -102,6 +102,12 @@ func Register(s *mcp.Server, c *aegis.Client, opts Options) {
 		Annotations: readOnly("Compose context"),
 	}, h.composeContext, nil)
 
+	add(s, &mcp.Tool{
+		Name:        "aegis_list_teams_and_roles",
+		Description: "List the organisation's teams and roles, the files each one's layer holds, and the repositories with a role-in-repository layer for each role. Check it for an existing or similar name before creating one.",
+		Annotations: readOnly("List teams and roles"),
+	}, h.listTeamsAndRoles, nil)
+
 	addPrompt(s, healthCheckPrompt)
 
 	if opts.ReadOnly {
@@ -110,6 +116,14 @@ func Register(s *mcp.Server, c *aegis.Client, opts Options) {
 
 	addPrompt(s, addRepoPrompt)
 	addPrompt(s, addGuidancePrompt)
+	addPrompt(s, addTeamPrompt)
+	addPrompt(s, addRolePrompt)
+
+	add(s, &mcp.Tool{
+		Name:        "aegis_create_team_or_role",
+		Description: "Create a team or role by writing its first CLAUDE.md (teams/<name>/ or roles/<name>/). Refused if it already exists. People are assigned to it by an administrator in the Aegis admin UI, not here, so it reaches nobody until then.",
+		Annotations: &mcp.ToolAnnotations{Title: "Create team or role", DestructiveHint: ptr(false), OpenWorldHint: ptr(false)},
+	}, h.createTeamOrRole, enum("kind", "team", "role"))
 
 	add(s, &mcp.Tool{
 		Name:        "aegis_create_file",

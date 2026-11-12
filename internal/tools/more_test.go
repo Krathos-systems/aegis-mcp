@@ -268,7 +268,7 @@ func TestNoInternalWordsInWhatClientsSee(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range prompts.Prompts {
-		text, err := getPrompt(t, cs, p.Name, map[string]string{"repo": "r", "guidance": "g"})
+		text, err := getPrompt(t, cs, p.Name, map[string]string{"repo": "r", "guidance": "g", "name": "n", "purpose": "p"})
 		if err != nil {
 			t.Fatal(err)
 		}

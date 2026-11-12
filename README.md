@@ -92,6 +92,8 @@ The token is never accepted as a command-line flag, because other users on the m
 | `aegis_list_variables` | Variables and where they are used (never secret values) |
 | `aegis_preview_role` | What one role receives in one repository after all layers merge |
 | `aegis_compose_context` | A repository's `CLAUDE.md` as one developer receives it (repository, teams, role and personal sections), with line counts against a budget and repeated lines. Accepts drafts, so a change can be checked before it is written. |
+| `aegis_list_teams_and_roles` | The teams and roles, the files each one holds, and the repositories where a role has its own layer |
+| `aegis_create_team_or_role` | Create a team or role by writing its first `CLAUDE.md`. An administrator still assigns people to it in the Aegis admin UI. |
 | `aegis_list_activity`, `aegis_show_change` | Who changed what, and the diff of one change |
 | `aegis_create_variable`, `aegis_update_variable`, `aegis_delete_variable` | Manage variables. A secret's value can be set but never read back. |
 | `aegis_register_repo`, `aegis_move_repo`, `aegis_unregister_repo` | Map git remotes to repository slugs |
@@ -105,6 +107,7 @@ Workflows you start by name (in Claude Code, `/mcp__aegis__<name>`):
 |---|---|
 | `add-repo` | Bring a repository's existing AI instructions into Aegis, split across the right layers rather than copied as one long file |
 | `add-guidance` | Decide where one rule belongs (or that it needs no line at all) and add it without duplicating what is there |
+| `add-team`, `add-role` | Create a team or role: check for an existing one, ask what it is for, decide what its layer holds (moving lines from elsewhere rather than copying them), then create it |
 | `health-check` | Explain what developers receive that is too long, repeated or in the wrong layer, and suggest fixes. Applies only the ones you pick. |
 
 Before a change to a `CLAUDE.md`, the model checks what developers will receive, with a subagent where the client has them, so whole files stay out of the main conversation.

@@ -82,6 +82,43 @@ var addGuidancePrompt = prompt{
 	},
 }
 
+var (
+	addTeamPrompt = layerPrompt("team", "payments", "Add a team",
+		"Create a team in Aegis: a group of people whose shared way of working follows them into every repository.",
+		"how this group of people works in any repository (review, tickets, release habits), never facts about one repository")
+	addRolePrompt = layerPrompt("role", "backend", "Add a role",
+		"Create a role in Aegis: a job function, with the instructions, settings, MCP servers, skills and agents everyone in it receives.",
+		"how this job function works across repositories, plus the settings, MCP servers, skills and agents it needs. What it does differently in one repository goes in repos/<repo>/roles/<role>")
+)
+
+// layerPrompt is the walkthrough for creating a team or a role.
+func layerPrompt(kind, example, title, description, holds string) prompt {
+	return prompt{
+		p: &mcp.Prompt{
+			Name:        "add-" + kind,
+			Title:       title,
+			Description: description,
+			Arguments: []*mcp.PromptArgument{
+				{Name: "name", Description: "the " + kind + "'s name, e.g. " + example, Required: true},
+				{Name: "purpose", Description: "what the " + kind + " is for, if you want to say up front"},
+			},
+		},
+		text: func(a map[string]string) string {
+			purpose := ""
+			if a["purpose"] != "" {
+				purpose = " It is for: " + a["purpose"]
+			}
+			return "Help me add the " + kind + " " + a["name"] + " to Aegis, following this server's instructions. Explain each step as you go." + purpose + "\n" +
+				"1. Call aegis_whoami and aegis_list_teams_and_roles. If this name or a similar one exists, show me and ask whether to use that instead. Suggest a lower-case, hyphenated name if mine does not fit.\n" +
+				"2. Ask me what you cannot tell: what the " + kind + " is for, who is in it, and which repositories they work in. Offer options with your recommendation.\n" +
+				"3. Decide with the placement ladder what its layer holds: " + holds + ". Look through global, the other teams and roles, and those repositories for lines that belong here instead, and propose moving them. A short or empty layer is fine.\n" +
+				"4. " + reviewStep + " Check one of those repositories, with the " + kind + "'s CLAUDE.md as a draft.\n" +
+				"5. Show me the plan, with sizes before and after. Only after I agree, create it with aegis_create_team_or_role and make the other changes.\n" +
+				"6. Tell me it reaches nobody until an administrator assigns people to it in the Aegis admin UI."
+		},
+	}
+}
+
 var healthCheckPrompt = prompt{
 	p: &mcp.Prompt{
 		Name:        "health-check",
