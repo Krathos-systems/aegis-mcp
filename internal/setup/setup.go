@@ -10,15 +10,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
 	"github.com/Krathos-systems/aegis-mcp/internal/aegis"
 	"github.com/Krathos-systems/aegis-mcp/internal/config"
+	"github.com/Krathos-systems/aegis-mcp/internal/tools"
 )
 
 // Options are the flags and facts setup needs.
@@ -66,13 +69,17 @@ func Run(ctx context.Context, o Options, in io.Reader, out io.Writer) error {
 		}
 		token = strings.TrimSpace(string(data))
 	} else {
-		fmt.Fprint(out, "Aegis admin token (input is hidden): ")
+		fmt.Fprint(out, "Aegis API token (input is hidden): ")
 		if token, err = readSecret(in, r, out); err != nil {
 			return fmt.Errorf("reading the token: %w", err)
 		}
 	}
 	if token == "" {
 		return errors.New("no token given")
+	}
+	if strings.HasPrefix(token, "aeg_") {
+		return errors.New("that is a developer API key (it starts with aeg_), which the aegis command uses. " +
+			"This needs an API token, which starts with aegt_: make one on your Aegis account page under API tokens")
 	}
 
 	me, err := aegis.New(server, token, "aegis-mcp/"+o.Version).Me(ctx)
@@ -84,6 +91,15 @@ func Run(ctx context.Context, o Options, in io.Reader, out io.Writer) error {
 		return fmt.Errorf("could not check the token with %s; nothing was saved: %w", server, err)
 	}
 	fmt.Fprintf(out, "✓ Signed in to %s as %s\n", server, describe(me))
+	if _, isToken := me["api_token"].(map[string]any); !isToken {
+		fmt.Fprintln(out, "! That is a sign-in session, not an API token, and it stops working within minutes.\n"+
+			"  Make an API token on your Aegis account page and run aegis-mcp setup again.")
+	} else {
+		printExpiry(me, out)
+		if !tools.WritesAllowed(me) {
+			fmt.Fprintln(out, "! This token can read but not change anything, so only the tools that read will be offered.")
+		}
+	}
 
 	if err := config.WriteFile(o.ConfigPath, config.File{Server: server, Token: token}); err != nil {
 		return fmt.Errorf("saving %s: %w", o.ConfigPath, err)
@@ -138,15 +154,47 @@ func readLine(r *bufio.Reader) (string, error) {
 	return strings.TrimSpace(line), err
 }
 
+// describe names the account, its level and the token, e.g.
+// `ada (editor), with the token "laptop" limited to collaborator`.
 func describe(me map[string]any) string {
-	name, _ := me["name"].(string)
+	name, _ := me["username"].(string) // what GET /admin/me calls it
+	if name == "" {
+		name, _ = me["name"].(string)
+	}
 	if name == "" {
 		name = "an unnamed account"
 	}
-	if level, ok := me["level"].(string); ok && level != "" {
-		return fmt.Sprintf("%s (%s)", name, level)
+	s := name
+	if level, ok := me["highest_level"].(string); ok && level != "" {
+		s = fmt.Sprintf("%s (%s)", name, level)
 	}
-	return name
+	if token, ok := me["api_token"].(map[string]any); ok {
+		if tokenName, _ := token["name"].(string); tokenName != "" {
+			s += fmt.Sprintf(", with the token %q", tokenName)
+		}
+		if limit, _ := token["level"].(string); limit != "" {
+			s += " limited to " + limit
+		}
+	}
+	return s
+}
+
+// soonDays is how close an expiry must be for setup to warn about it.
+const soonDays = 14
+
+// printExpiry says when the token expires, as a warning when that is soon.
+func printExpiry(me map[string]any, out io.Writer) {
+	expires, ok := tools.TokenExpiry(me)
+	if !ok {
+		return
+	}
+	days := int(math.Round(time.Until(expires).Hours() / 24))
+	when := fmt.Sprintf("on %s, in %d days", expires.UTC().Format("2 Jan 2006"), days)
+	if days < soonDays {
+		fmt.Fprintf(out, "! This token expires %s. Make a new one before then and run aegis-mcp setup again.\n", when)
+		return
+	}
+	fmt.Fprintf(out, "✓ The token expires %s\n", when)
 }
 
 // registerClaudeCode adds the server to Claude Code's user scope when the

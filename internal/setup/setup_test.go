@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Krathos-systems/aegis-mcp/internal/config"
 )
@@ -83,7 +84,7 @@ func saved(t *testing.T, path string) config.File {
 
 func TestInteractive(t *testing.T) {
 	noClaude(t)
-	url := aegisServer(t, `{"name":"ada","level":"editor"}`)
+	url := aegisServer(t, `{"username":"ada","highest_level":"editor","api_token":{"id":"abc","name":"laptop","level":null}}`)
 	o := opts(t)
 
 	// A bad address is explained and asked again; the token's last line has
@@ -92,13 +93,13 @@ func TestInteractive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	for _, want := range []string{"✗", "Signed in to " + url + " as ada (editor)", "Saved to " + o.ConfigPath, `"command": "/opt/aegis mcp/aegis-mcp"`} {
+	for _, want := range []string{"✗", "Signed in to " + url + ` as ada (editor), with the token "laptop"`, "Saved to " + o.ConfigPath, `"command": "/opt/aegis mcp/aegis-mcp"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "Claude Code") {
-		t.Errorf("mentions Claude Code without it installed:\n%s", out)
+	if strings.Contains(out, "Claude Code") || strings.Contains(out, "!") {
+		t.Errorf("unexpected warning or Claude Code mention:\n%s", out)
 	}
 	if f := saved(t, o.ConfigPath); f.Server != url || f.Token != "good" {
 		t.Errorf("saved %+v", f)
@@ -114,7 +115,8 @@ func TestScripted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out, "address") || strings.Contains(out, "token (") || !strings.Contains(out, "as ada\n") {
+	if strings.Contains(out, "address") || strings.Contains(out, "token (") || !strings.Contains(out, "as ada\n") ||
+		!strings.Contains(out, "sign-in session") {
 		t.Errorf("unexpected output:\n%s", out)
 	}
 	if f := saved(t, o.ConfigPath); f.Server != url {
@@ -184,14 +186,59 @@ func TestSaveFailure(t *testing.T) {
 
 func TestDescribe(t *testing.T) {
 	cases := map[string]map[string]any{
-		"ada (editor)":       {"name": "ada", "level": "editor"},
-		"ada":                {"name": "ada", "level": ""},
+		"ada (editor)":       {"name": "ada", "highest_level": "editor"},
+		"bob (reader)":       {"username": "bob", "name": "ignored", "highest_level": "reader"},
+		"ada":                {"name": "ada", "highest_level": ""},
 		"an unnamed account": {},
+		`ada (editor), with the token "laptop" limited to collaborator`: {
+			"name": "ada", "highest_level": "editor",
+			"api_token": map[string]any{"name": "laptop", "level": "collaborator"},
+		},
+		"ada (editor) limited to reader": {
+			"name": "ada", "highest_level": "editor", "api_token": map[string]any{"level": "reader"},
+		},
 	}
 	for want, me := range cases {
 		if got := describe(me); got != want {
-			t.Errorf("describe(%v) = %q", me, got)
+			t.Errorf("describe(%v) = %q; want %q", me, got, want)
 		}
+	}
+}
+
+func TestDeveloperKeyIsRefused(t *testing.T) {
+	noClaude(t)
+	o := opts(t)
+	o.Server, o.TokenStdin = aegisServer(t, `{}`), true
+	_, err := run(t, o, "aeg_abcdefgh_secret")
+	if err == nil || !strings.Contains(err.Error(), "aegt_") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestExpiryIsShown(t *testing.T) {
+	noClaude(t)
+	at := func(d time.Duration) string { return time.Now().Add(d).UTC().Format(time.RFC3339) }
+	cases := map[time.Duration]string{
+		60 * 24 * time.Hour: "✓ The token expires on",
+		3 * 24 * time.Hour:  "! This token expires on",
+	}
+	for in, want := range cases {
+		o := opts(t)
+		o.Server = aegisServer(t, `{"name":"ada","highest_level":"editor","api_token":{"name":"x","expires_at":"`+at(in)+`"}}`)
+		out, err := run(t, o, "good\n")
+		if err != nil || !strings.Contains(out, want) {
+			t.Errorf("expires in %s: err=%v\n%s", in, err, out)
+		}
+	}
+}
+
+func TestReadOnlyTokenIsExplained(t *testing.T) {
+	noClaude(t)
+	o := opts(t)
+	o.Server = aegisServer(t, `{"name":"ada","highest_level":"collaborator","api_token":{"name":"ro","level":"collaborator"}}`)
+	out, err := run(t, o, "good\n")
+	if err != nil || !strings.Contains(out, "can read but not change") {
+		t.Fatalf("err=%v\n%s", err, out)
 	}
 }
 

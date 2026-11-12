@@ -18,8 +18,12 @@ import (
 	"time"
 )
 
-// Timeout is how long one request may take.
+// Timeout is how long one request may take unless it sets its own.
 const Timeout = 30 * time.Second
+
+// LongTimeout is for requests that make Aegis read a git repository, which it
+// allows up to two minutes.
+const LongTimeout = 150 * time.Second
 
 // maxBody caps how much of a response is read. Managed files are capped at
 // 1 MiB by the server, so this leaves room for JSON listings around them.
@@ -40,7 +44,7 @@ func New(baseURL, token, userAgent string) *Client {
 		token:     token,
 		userAgent: userAgent,
 		http: &http.Client{
-			Timeout: Timeout,
+			// Each request carries its own deadline (Request.Timeout).
 			// Never follow a redirect: it would carry the token to wherever it points.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
@@ -85,10 +89,19 @@ type Request struct {
 	Body        []byte
 	ContentType string
 	IfMatch     string
+	// Timeout overrides the default Timeout for this request.
+	Timeout time.Duration
 }
 
 // Do performs one request and returns an error for any non-2xx status.
 func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
+	timeout := r.Timeout
+	if timeout == 0 {
+		timeout = Timeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	u := c.baseURL + "/api" + r.Path
 	if len(r.Query) > 0 {
 		u += "?" + r.Query.Encode()
@@ -128,6 +141,16 @@ func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
 	return &Response{Status: resp.StatusCode, Body: data, ETag: resp.Header.Get("ETag")}, nil
 }
 
+// SendJSON encodes body as the request's JSON body, then works like JSON.
+func (c *Client) SendJSON(ctx context.Context, r Request, body, out any) (*Response, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	r.Body, r.ContentType = data, "application/json"
+	return c.JSON(ctx, r, out)
+}
+
 // JSON performs a request and decodes a JSON response into out.
 func (c *Client) JSON(ctx context.Context, r Request, out any) (*Response, error) {
 	resp, err := c.Do(ctx, r)
@@ -144,6 +167,8 @@ func (c *Client) JSON(ctx context.Context, r Request, out any) (*Response, error
 
 // Health performs GET /health (outside /api, no token needed).
 func (c *Client) Health(ctx context.Context) (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(ctx, Timeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/health", nil)
 	if err != nil {
 		return nil, err

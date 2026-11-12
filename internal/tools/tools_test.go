@@ -163,12 +163,14 @@ func TestReadOnlyHidesWriteTools(t *testing.T) {
 	ro, _ := connect(t, "good", true)
 	rw, _ := connect(t, "good", false)
 	for _, n := range toolNames(t, ro) {
-		if strings.Contains(n, "create") || strings.Contains(n, "update") || strings.Contains(n, "delete") {
+		if strings.Contains(n, "create") || strings.Contains(n, "update") || strings.Contains(n, "delete") ||
+			strings.Contains(n, "repo_") && n != "aegis_list_repos" || strings.Contains(n, "move") {
 			t.Errorf("read-only server offers %s", n)
 		}
 	}
 	all := strings.Join(toolNames(t, rw), " ")
-	for _, want := range []string{"aegis_create_file", "aegis_update_file", "aegis_delete_file"} {
+	for _, want := range []string{"aegis_create_file", "aegis_update_file", "aegis_delete_file",
+		"aegis_create_variable", "aegis_import_repo", "aegis_scan_repo_import", "aegis_list_activity"} {
 		if !strings.Contains(all, want) {
 			t.Errorf("missing %s in %s", want, all)
 		}
@@ -244,7 +246,7 @@ func TestBadInputs(t *testing.T) {
 func TestRejectedToken(t *testing.T) {
 	cs, _ := connect(t, "bad", false)
 	_, text, isErr := call(t, cs, "aegis_whoami", nil)
-	if !isErr || !strings.Contains(text, "401") || !strings.Contains(text, "new one") {
+	if !isErr || !strings.Contains(text, "401") || !strings.Contains(text, "aegis-mcp setup") {
 		t.Fatalf("isErr=%v %s", isErr, text)
 	}
 }

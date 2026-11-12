@@ -105,7 +105,7 @@ func TestSession(t *testing.T) {
 
 	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`)
 	init := recv()["result"].(map[string]any)
-	if init["serverInfo"].(map[string]any)["name"] != "aegis" || !strings.Contains(init["instructions"].(string), "Layers:") {
+	if init["serverInfo"].(map[string]any)["name"] != "aegis" || !strings.Contains(init["instructions"].(string), "Where guidance goes") {
 		t.Fatalf("initialize: %v", init)
 	}
 	send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
@@ -202,7 +202,7 @@ func setupAegis(t *testing.T) string {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		io.WriteString(w, `{"name":"ada","level":"editor"}`)
+		io.WriteString(w, `{"username":"ada","highest_level":"editor","api_token":{"id":"abc","name":"laptop","level":null}}`)
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
@@ -216,7 +216,7 @@ func TestSetupThenServe(t *testing.T) {
 	var out, errw bytes.Buffer
 	code := run(t.Context(), []string{"setup", "--server", url, "--token-stdin", "--no-client"},
 		io.NopCloser(strings.NewReader("good\n")), nopWriteCloser{&out}, &errw, env(e))
-	if code != 0 || !strings.Contains(out.String(), "as ada (editor)") {
+	if code != 0 || !strings.Contains(out.String(), `as ada (editor), with the token "laptop"`) {
 		t.Fatalf("setup: code=%d out=%q err=%q", code, out.String(), errw.String())
 	}
 
@@ -273,5 +273,99 @@ func TestSetupWithoutConfigDirOrExecutable(t *testing.T) {
 	if code := run(t.Context(), []string{"setup"}, io.NopCloser(strings.NewReader("")), nopWriteCloser{io.Discard}, &errw, env(nil)); code != 1 ||
 		!strings.Contains(errw.String(), "cannot tell where") {
 		t.Fatalf("code=%d err=%q", code, errw.String())
+	}
+}
+
+// ---- the start-up check of what the token may do ----
+
+func init() {
+	// Tests that point at an address nothing answers should not wait 5 s.
+	probeTimeout = 300 * time.Millisecond
+}
+
+// toolsOffered starts the server against an Aegis answering /admin/me with me
+// (or not at all when me is ""), and returns the tool names and stderr.
+func toolsOffered(t *testing.T, me string) ([]string, string) {
+	t.Helper()
+	server := "http://127.0.0.1:1" // nothing listens there
+	if me != "" {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, me) }))
+		t.Cleanup(srv.Close)
+		server = srv.URL
+	}
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	var errw bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- run(t.Context(), nil, inR, outW, &errw, env(map[string]string{"AEGIS_SERVER": server, "AEGIS_TOKEN": "tok"}))
+		outW.Close()
+	}()
+	lines := bufio.NewScanner(outR)
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`+"\n")
+	lines.Scan()
+	io.WriteString(inW, `{"jsonrpc":"2.0","method":"notifications/initialized"}`+"\n")
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`+"\n")
+	lines.Scan()
+	var reply struct {
+		Result struct {
+			Tools []struct{ Name string } `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(lines.Bytes(), &reply); err != nil {
+		t.Fatalf("tools/list: %v %q", err, lines.Text())
+	}
+	inW.Close()
+	<-done
+	var names []string
+	for _, tl := range reply.Result.Tools {
+		names = append(names, tl.Name)
+	}
+	return names, errw.String()
+}
+
+func TestWriteToolsFollowTheTokensLevel(t *testing.T) {
+	names, stderr := toolsOffered(t, `{"name":"ada","highest_level":"editor","api_token":{"name":"x","level":null}}`)
+	if !strings.Contains(strings.Join(names, ","), "aegis_update_file") || stderr != "" {
+		t.Errorf("editor token: %v %q", names, stderr)
+	}
+
+	names, stderr = toolsOffered(t, `{"name":"ada","highest_level":"collaborator","api_token":{"name":"x","level":"collaborator"}}`)
+	if strings.Contains(strings.Join(names, ","), "aegis_update_file") || !strings.Contains(stderr, "only the tools that read") {
+		t.Errorf("collaborator token: %v %q", names, stderr)
+	}
+}
+
+func TestExpiringTokenIsWarnedAtStart(t *testing.T) {
+	soon := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
+	_, stderr := toolsOffered(t, `{"name":"ada","highest_level":"editor","api_token":{"name":"x","expires_at":"`+soon+`"}}`)
+	if !strings.Contains(stderr, "this API token expires on") {
+		t.Errorf("stderr = %q", stderr)
+	}
+	later := time.Now().Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if _, stderr := toolsOffered(t, `{"name":"ada","highest_level":"editor","api_token":{"name":"x","expires_at":"`+later+`"}}`); stderr != "" {
+		t.Errorf("warned about a distant expiry: %q", stderr)
+	}
+}
+
+func TestRefusedTokenIsExplainedAtStart(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":"this API token is not valid"}`)
+	}))
+	defer srv.Close()
+	// stdin is already at its end, so the server stops right after the start-up check.
+	var errw bytes.Buffer
+	run(t.Context(), nil, io.NopCloser(strings.NewReader("")), nopWriteCloser{io.Discard}, &errw,
+		env(map[string]string{"AEGIS_SERVER": srv.URL, "AEGIS_TOKEN": "aegt_x"}))
+	if !strings.Contains(errw.String(), "Aegis refused the token (this API token is not valid)") {
+		t.Fatalf("stderr = %q", errw.String())
+	}
+}
+
+func TestUnreachableAegisOffersEveryTool(t *testing.T) {
+	names, stderr := toolsOffered(t, "")
+	if !strings.Contains(strings.Join(names, ","), "aegis_update_file") || !strings.Contains(stderr, "could not check the token") {
+		t.Errorf("unreachable: %v %q", names, stderr)
 	}
 }

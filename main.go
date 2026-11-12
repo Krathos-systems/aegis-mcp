@@ -7,12 +7,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -52,7 +55,7 @@ func run(ctx context.Context, args []string, in io.ReadCloser, out io.WriteClose
 
 The server uses what setup saved, unless these are set:
   AEGIS_SERVER      your Aegis address, e.g. https://acme.example.com
-  AEGIS_TOKEN       an Aegis admin token, or
+  AEGIS_TOKEN       an Aegis API token (aegt_…), or
   AEGIS_TOKEN_FILE  a file holding one
   AEGIS_READ_ONLY   true to offer only tools that read
 
@@ -81,6 +84,9 @@ Flags:
 	}
 
 	client := aegis.New(cfg.Server, cfg.Token, "aegis-mcp/"+version)
+	if !cfg.ReadOnly {
+		cfg.ReadOnly = !canWrite(ctx, client, errw)
+	}
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "aegis",
 		Title:   "Aegis",
@@ -93,6 +99,39 @@ Flags:
 		return 1
 	}
 	return 0
+}
+
+// probeTimeout bounds the start-up check of what the token may do.
+var probeTimeout = 5 * time.Second
+
+// expiryWarning is how close a token's expiry must be for start-up to warn.
+const expiryWarning = 7 * 24 * time.Hour
+
+// canWrite asks Aegis what the token may do, so a token that cannot change
+// anything is offered only the tools that read. If Aegis cannot be asked, every
+// tool is offered and Aegis refuses what it must.
+func canWrite(ctx context.Context, c *aegis.Client, errw io.Writer) bool {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	me, err := c.Me(ctx)
+	var se *aegis.StatusError
+	if errors.As(err, &se) && se.Status == http.StatusUnauthorized {
+		fmt.Fprintf(errw, "aegis-mcp: Aegis refused the token (%s). Make a new API token on your Aegis account page and run aegis-mcp setup.\n", se.Message)
+		return true
+	}
+	if err != nil {
+		fmt.Fprintln(errw, "aegis-mcp: warning: could not check the token with Aegis:", err)
+		return true
+	}
+	if expires, ok := tools.TokenExpiry(me); ok && time.Until(expires) < expiryWarning {
+		fmt.Fprintf(errw, "aegis-mcp: warning: this API token expires on %s. Make a new one on your Aegis account page and run aegis-mcp setup.\n",
+			expires.UTC().Format("2 Jan 2006"))
+	}
+	if tools.WritesAllowed(me) {
+		return true
+	}
+	fmt.Fprintln(errw, "aegis-mcp: this token cannot change anything, so only the tools that read are offered")
+	return false
 }
 
 // Replaceable in tests.

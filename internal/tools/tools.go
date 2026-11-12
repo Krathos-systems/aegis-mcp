@@ -10,12 +10,33 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Krathos-systems/aegis-mcp/internal/aegis"
 )
+
+// levelRank orders Aegis's permission levels.
+var levelRank = map[string]int{"reader": 1, "collaborator": 2, "editor": 3, "administrator": 4}
+
+// WritesAllowed reports whether an account, as GET /admin/me describes it,
+// holds editor anywhere — the least any write tool needs. For an API token the
+// levels are already lowered to the token's limit.
+func WritesAllowed(me map[string]any) bool {
+	level, _ := me["highest_level"].(string)
+	return levelRank[level] >= levelRank["editor"]
+}
+
+// TokenExpiry is when the API token expires, as GET /admin/me reports it.
+// ok is false for a session, or an Aegis that does not report it.
+func TokenExpiry(me map[string]any) (expires time.Time, ok bool) {
+	token, _ := me["api_token"].(map[string]any)
+	s, _ := token["expires_at"].(string)
+	t, err := time.Parse(time.RFC3339, s)
+	return t, err == nil
+}
 
 // Options controls which tools are registered.
 type Options struct {
@@ -63,9 +84,32 @@ func Register(s *mcp.Server, c *aegis.Client, opts Options) {
 		Annotations: readOnly("Preview a role"),
 	}, h.previewRole, nil)
 
+	add(s, &mcp.Tool{
+		Name:        "aegis_list_activity",
+		Description: "List recent changes to Aegis's files, newest first: who made each one, when, and which files it touched. Includes changes made through this server.",
+		Annotations: readOnly("List activity"),
+	}, h.listActivity, nil)
+
+	add(s, &mcp.Tool{
+		Name:        "aegis_show_change",
+		Description: "Show the diff of one change from aegis_list_activity.",
+		Annotations: readOnly("Show a change"),
+	}, h.showChange, nil)
+
+	add(s, &mcp.Tool{
+		Name:        "aegis_compose_context",
+		Description: "Compose a repository's ./CLAUDE.md the way Aegis delivers it to one developer (repository, teams, role, role-in-repository and personal sections, in order), plus the global file. drafts stand in for stored files, so a change can be checked before it is written. Reports lines per section against the budget, lines repeated across sections or with global, and the skills and agents each layer contributes.",
+		Annotations: readOnly("Compose context"),
+	}, h.composeContext, nil)
+
+	addPrompt(s, healthCheckPrompt)
+
 	if opts.ReadOnly {
 		return
 	}
+
+	addPrompt(s, addRepoPrompt)
+	addPrompt(s, addGuidancePrompt)
 
 	add(s, &mcp.Tool{
 		Name:        "aegis_create_file",
@@ -78,6 +122,54 @@ func Register(s *mcp.Server, c *aegis.Client, opts Options) {
 		Description: "Replace the whole body of an existing managed file. etag must come from aegis_read_file; if the file changed since, the update is refused and you should read it again.",
 		Annotations: &mcp.ToolAnnotations{Title: "Update file", DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, h.updateFile, planeEnum)
+
+	add(s, &mcp.Tool{
+		Name:        "aegis_create_variable",
+		Description: "Create a variable that files can reference as {{ aegis.NAME }}. kind \"cleartext\" is substituted into delivered files; kind \"secret\" is stored encrypted, can never be read back, and is only usable as the whole value of an env entry of an MCP server with a command in mcp.json. Only create a secret with a value the user gave you for that purpose, and do not repeat it.",
+		Annotations: &mcp.ToolAnnotations{Title: "Create variable", DestructiveHint: ptr(false), OpenWorldHint: ptr(false)},
+	}, h.createVariable, enum("kind", "cleartext", "secret"))
+
+	add(s, &mcp.Tool{
+		Name:        "aegis_update_variable",
+		Description: "Change a variable's value, description or kind. Leave value out to keep the stored one (a secret's value cannot be read, so this is how to edit its description). Changing kind needs the value again.",
+		Annotations: &mcp.ToolAnnotations{Title: "Update variable", DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
+	}, h.updateVariable, enum("kind", "cleartext", "secret"))
+
+	add(s, &mcp.Tool{
+		Name:        "aegis_delete_variable",
+		Description: "Delete a variable. Refused while files still reference it, unless force is true, in which case those references stop resolving until the files are fixed.",
+		Annotations: &mcp.ToolAnnotations{Title: "Delete variable", DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
+	}, h.deleteVariable, nil)
+
+	add(s, &mcp.Tool{
+		Name:        "aegis_register_repo",
+		Description: "Register a git remote under a repository slug, so developers working in that repository receive its repos/<slug>/ files. A second remote for the same slug (a mirror or fork) is an alias.",
+		Annotations: &mcp.ToolAnnotations{Title: "Register repository", DestructiveHint: ptr(false), OpenWorldHint: ptr(false)},
+	}, h.registerRepo, nil)
+
+	add(s, &mcp.Tool{
+		Name:        "aegis_move_repo",
+		Description: "Point a registered remote (by its id from aegis_list_repos) at a different repository slug.",
+		Annotations: &mcp.ToolAnnotations{Title: "Move repository remote", DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
+	}, h.moveRepo, nil)
+
+	add(s, &mcp.Tool{
+		Name:        "aegis_unregister_repo",
+		Description: "Remove a registered remote (by its id). When it is the slug's last remote, developers in that repository stop receiving its files and the slug's permission grants are removed.",
+		Annotations: &mcp.ToolAnnotations{Title: "Unregister repository", DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
+	}, h.unregisterRepo, nil)
+
+	add(s, &mcp.Tool{
+		Name:        "aegis_scan_repo_import",
+		Description: "Read a registered repository (by its id) and list the AI files in it that an import would bring into Aegis, which already exist, and which cannot be imported. Changes nothing. Returns the sha to pass to aegis_import_repo. The repository's read access must be set up in Aegis first.",
+		Annotations: &mcp.ToolAnnotations{Title: "Scan repository for import", ReadOnlyHint: true, OpenWorldHint: ptr(true)},
+	}, h.scanImport, nil)
+
+	add(s, &mcp.Tool{
+		Name:        "aegis_import_repo",
+		Description: "Import the files aegis_scan_repo_import listed into the repository's layer, as one change. Files that already exist in Aegis are skipped unless named in replace. Refused if the repository changed since the scan; scan again.",
+		Annotations: &mcp.ToolAnnotations{Title: "Import repository files", DestructiveHint: ptr(true), OpenWorldHint: ptr(true)},
+	}, h.importRepo, nil)
 
 	add(s, &mcp.Tool{
 		Name:        "aegis_delete_file",
@@ -99,9 +191,15 @@ func add[In, Out any](s *mcp.Server, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out],
 	mcp.AddTool(s, t, h)
 }
 
-func planeEnum(s *jsonschema.Schema) {
-	if p, ok := s.Properties["plane"]; ok {
-		p.Enum = []any{string(aegis.Content), string(aegis.Config)}
+var planeEnum = enum("plane", string(aegis.Content), string(aegis.Config))
+
+// enum limits one string property of the input schema to values.
+func enum(property string, values ...string) func(*jsonschema.Schema) {
+	return func(s *jsonschema.Schema) {
+		p := s.Properties[property]
+		for _, v := range values {
+			p.Enum = append(p.Enum, v)
+		}
 	}
 }
 
@@ -110,6 +208,15 @@ func readOnly(title string) *mcp.ToolAnnotations {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// markdownLines is a content file's line count, the nudge a write gives
+// towards the budget; 0 (left out) for anything else.
+func markdownLines(plane aegis.Plane, path, body string) int {
+	if plane != aegis.Content || !strings.HasSuffix(path, ".md") {
+		return 0
+	}
+	return lineCount(body)
+}
 
 type handlers struct{ c *aegis.Client }
 
@@ -150,6 +257,58 @@ type previewIn struct {
 	Repo string `json:"repo" jsonschema:"repository slug, from aegis_list_repos"`
 }
 
+type activityIn struct {
+	Limit  int `json:"limit,omitempty" jsonschema:"how many changes, at most 200 (default 50)"`
+	Offset int `json:"offset,omitempty" jsonschema:"changes to skip, for paging"`
+}
+
+type changeIn struct {
+	SHA string `json:"sha" jsonschema:"the change's sha from aegis_list_activity"`
+}
+
+type createVariableIn struct {
+	Name        string `json:"name" jsonschema:"upper snake case, e.g. API_BASE_URL"`
+	Kind        string `json:"kind" jsonschema:"cleartext or secret"`
+	Value       string `json:"value"`
+	Description string `json:"description,omitempty"`
+}
+
+type updateVariableIn struct {
+	Name        string  `json:"name"`
+	Value       *string `json:"value,omitempty" jsonschema:"the new value; leave out to keep the stored one"`
+	Description *string `json:"description,omitempty" jsonschema:"the new description; leave out to keep it"`
+	Kind        *string `json:"kind,omitempty" jsonschema:"cleartext or secret; changing it needs value"`
+}
+
+type deleteVariableIn struct {
+	Name  string `json:"name"`
+	Force bool   `json:"force,omitempty" jsonschema:"delete even though files still reference it"`
+}
+
+type registerRepoIn struct {
+	RemoteURL string `json:"remote_url" jsonschema:"the git remote, e.g. https://github.com/acme/web.git or git@github.com:acme/web.git"`
+	Repo      string `json:"repo" jsonschema:"the repository slug, e.g. web"`
+}
+
+type moveRepoIn struct {
+	ID   int    `json:"id" jsonschema:"the remote's id from aegis_list_repos"`
+	Repo string `json:"repo" jsonschema:"the slug to point it at"`
+}
+
+type repoIDIn struct {
+	ID int `json:"id" jsonschema:"the remote's id from aegis_list_repos"`
+}
+
+type importIn struct {
+	ID      int      `json:"id" jsonschema:"the remote's id from aegis_list_repos"`
+	SHA     string   `json:"sha" jsonschema:"the sha aegis_scan_repo_import returned"`
+	Replace []string `json:"replace,omitempty" jsonschema:"targets that already exist in Aegis to overwrite"`
+}
+
+type doneOut struct {
+	Done bool `json:"done"`
+}
+
 type whoamiOut struct {
 	Server  string         `json:"server"`
 	Account map[string]any `json:"account"`
@@ -173,6 +332,7 @@ type writeOut struct {
 	Path    string `json:"path"`
 	Created bool   `json:"created"`
 	ETag    string `json:"etag" jsonschema:"use this etag for the next update"`
+	Lines   int    `json:"lines,omitempty" jsonschema:"lines in a Markdown file; check the composed size with aegis_compose_context"`
 }
 
 type deleteOut struct {
@@ -239,7 +399,7 @@ func (h *handlers) createFile(ctx context.Context, _ *mcp.CallToolRequest, in cr
 		}
 		return nil, writeOut{}, explain(err)
 	}
-	return nil, writeOut{Plane: string(plane), Path: in.Path, Created: true, ETag: r.ETag}, nil
+	return nil, writeOut{Plane: string(plane), Path: in.Path, Created: true, ETag: r.ETag, Lines: markdownLines(plane, in.Path, in.Body)}, nil
 }
 
 func (h *handlers) updateFile(ctx context.Context, _ *mcp.CallToolRequest, in updateIn) (*mcp.CallToolResult, writeOut, error) {
@@ -256,7 +416,7 @@ func (h *handlers) updateFile(ctx context.Context, _ *mcp.CallToolRequest, in up
 	if r.Created {
 		return nil, writeOut{}, fmt.Errorf("%s/%s did not exist and was created; use aegis_create_file for new files", plane, in.Path)
 	}
-	return nil, writeOut{Plane: string(plane), Path: in.Path, ETag: r.ETag}, nil
+	return nil, writeOut{Plane: string(plane), Path: in.Path, ETag: r.ETag, Lines: markdownLines(plane, in.Path, in.Body)}, nil
 }
 
 func (h *handlers) deleteFile(ctx context.Context, _ *mcp.CallToolRequest, in deleteIn) (*mcp.CallToolResult, deleteOut, error) {
@@ -297,6 +457,73 @@ func (h *handlers) previewRole(ctx context.Context, _ *mcp.CallToolRequest, in p
 	return nil, v, nil
 }
 
+func (h *handlers) listActivity(ctx context.Context, _ *mcp.CallToolRequest, in activityIn) (*mcp.CallToolResult, map[string]any, error) {
+	return result(h.c.Activity(ctx, in.Limit, in.Offset))
+}
+
+func (h *handlers) showChange(ctx context.Context, _ *mcp.CallToolRequest, in changeIn) (*mcp.CallToolResult, map[string]any, error) {
+	return result(h.c.Change(ctx, in.SHA))
+}
+
+func (h *handlers) createVariable(ctx context.Context, _ *mcp.CallToolRequest, in createVariableIn) (*mcp.CallToolResult, map[string]any, error) {
+	return result(h.c.CreateVariable(ctx, in.Name, aegis.VariableChange{
+		Kind: &in.Kind, Value: &in.Value, Description: &in.Description,
+	}))
+}
+
+func (h *handlers) updateVariable(ctx context.Context, _ *mcp.CallToolRequest, in updateVariableIn) (*mcp.CallToolResult, map[string]any, error) {
+	change := aegis.VariableChange{Kind: in.Kind, Value: in.Value, Description: in.Description}
+	if change.Description == nil {
+		// Aegis replaces the description with whatever is sent, empty included,
+		// so keep the current one unless asked to change it.
+		current, err := h.c.Variable(ctx, in.Name)
+		if err != nil {
+			return nil, nil, explain(err)
+		}
+		description, _ := current["description"].(string)
+		change.Description = &description
+	}
+	return result(h.c.UpdateVariable(ctx, in.Name, change))
+}
+
+func (h *handlers) deleteVariable(ctx context.Context, _ *mcp.CallToolRequest, in deleteVariableIn) (*mcp.CallToolResult, doneOut, error) {
+	if err := h.c.DeleteVariable(ctx, in.Name, in.Force); err != nil {
+		return nil, doneOut{}, explain(err)
+	}
+	return nil, doneOut{Done: true}, nil
+}
+
+func (h *handlers) registerRepo(ctx context.Context, _ *mcp.CallToolRequest, in registerRepoIn) (*mcp.CallToolResult, map[string]any, error) {
+	return result(h.c.RegisterRepo(ctx, in.RemoteURL, in.Repo))
+}
+
+func (h *handlers) moveRepo(ctx context.Context, _ *mcp.CallToolRequest, in moveRepoIn) (*mcp.CallToolResult, map[string]any, error) {
+	return result(h.c.MoveRepo(ctx, in.ID, in.Repo))
+}
+
+func (h *handlers) unregisterRepo(ctx context.Context, _ *mcp.CallToolRequest, in repoIDIn) (*mcp.CallToolResult, doneOut, error) {
+	if err := h.c.UnregisterRepo(ctx, in.ID); err != nil {
+		return nil, doneOut{}, explain(err)
+	}
+	return nil, doneOut{Done: true}, nil
+}
+
+func (h *handlers) scanImport(ctx context.Context, _ *mcp.CallToolRequest, in repoIDIn) (*mcp.CallToolResult, map[string]any, error) {
+	return result(h.c.ScanImport(ctx, in.ID))
+}
+
+func (h *handlers) importRepo(ctx context.Context, _ *mcp.CallToolRequest, in importIn) (*mcp.CallToolResult, map[string]any, error) {
+	return result(h.c.Import(ctx, in.ID, in.SHA, in.Replace))
+}
+
+// result adapts a client call that returns a JSON object to a tool result.
+func result(v map[string]any, err error) (*mcp.CallToolResult, map[string]any, error) {
+	if err != nil {
+		return nil, nil, explain(err)
+	}
+	return nil, v, nil
+}
+
 // explain turns an Aegis error into a sentence a model can act on. The
 // server's own message is kept; the hint says what to do next.
 func explain(err error) error {
@@ -311,7 +538,7 @@ func explain(err error) error {
 	var hint string
 	switch se.Status {
 	case http.StatusUnauthorized:
-		hint = "the token was refused; it may be wrong, expired or revoked. Ask the user for a new one"
+		hint = "the token was refused: it may be mistyped, expired or revoked. The user can make a new API token on their Aegis account page and run `aegis-mcp setup` with it"
 	case http.StatusForbidden:
 		if req, ok := se.Body["required"].(string); ok {
 			held, _ := se.Body["held"].(string)
@@ -323,9 +550,20 @@ func explain(err error) error {
 			hint = "this account is not allowed to do that"
 		}
 	case http.StatusNotFound:
-		hint = "check the path with aegis_list_files"
+		hint = "check that it exists with the matching aegis_list_ tool"
 	case http.StatusConflict:
-		hint = "the file changed since it was read; read it again, reapply the change, and retry with the new etag"
+		_, rescan := se.Body["sha"]
+		_, referenced := se.Body["used_in"]
+		switch {
+		case rescan:
+			hint = "run aegis_scan_repo_import again and import with the new sha"
+		case referenced:
+			hint = "change the files that reference it first, or delete it with force"
+		case strings.Contains(msg, "already"):
+			hint = "it already exists"
+		default:
+			hint = "the file changed since it was read; read it again, reapply the change, and retry with the new etag"
+		}
 	case http.StatusPaymentRequired:
 		hint = "the organisation's plan limit is reached"
 	case http.StatusRequestEntityTooLarge:

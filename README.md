@@ -8,6 +8,14 @@ An [MCP](https://modelcontextprotocol.io) server for [Aegis](https://aegis.krath
 
 `aegis-mcp` runs on your machine. Your AI client starts it and talks to it over stdio, and it calls the Aegis API with an admin token. Aegis checks every call against the token's account, so the MCP server can do exactly what that account can do in the Aegis UI and nothing more. Every change is recorded in Aegis's history under that account.
 
+## Get an API token
+
+The server acts with an Aegis **API token**, which starts with `aegt_`. To make one, open your account page in Aegis and go to **API tokens**. Give it a name, choose when it expires, and copy it; it's shown only once. A token acts as you, at most at editor level, so it can manage files, variables and repositories but never people, permissions or settings.
+
+For a server that should only read, limit the token to collaborator. The server then offers only the tools that read.
+
+An API key from the `aegis` command (starting with `aeg_`) is a different thing and won't work here.
+
 ## Install
 
 **macOS and Linux**
@@ -24,7 +32,7 @@ irm https://github.com/Krathos-systems/aegis-mcp/releases/latest/download/instal
 
 That's the whole install. The script downloads `aegis-mcp` for your system, checks it against the release's `SHA256SUMS`, and puts it in `~/.local/bin` (Windows: `%LOCALAPPDATA%\Programs\aegis-mcp`, added to your PATH). It never needs `sudo` or an administrator prompt. Then it runs `aegis-mcp setup`, which:
 
-1. asks for your Aegis address and an admin token (the token is not shown as you type),
+1. asks for your Aegis address and API token (the token is not shown as you type),
 2. checks them with Aegis, so a typo is caught now rather than in your AI client,
 3. saves them in a file only you can read,
 4. adds the server to Claude Code if you have it, and prints the config for any other MCP client.
@@ -63,7 +71,7 @@ aegis-mcp setup
 | Variable | |
 |---|---|
 | `AEGIS_SERVER` | Your Aegis address, e.g. `https://acme.example.com` |
-| `AEGIS_TOKEN` | Your Aegis admin token |
+| `AEGIS_TOKEN` | Your Aegis API token |
 | `AEGIS_TOKEN_FILE` | A file holding the token, instead of `AEGIS_TOKEN` |
 | `AEGIS_READ_ONLY` | `true` to offer only the tools that read (same as `--read-only`) |
 | `AEGIS_MCP_CONFIG` | Use a different config file |
@@ -83,6 +91,23 @@ The token is never accepted as a command-line flag, because other users on the m
 | `aegis_list_repos` | Registered repositories and their slugs |
 | `aegis_list_variables` | Variables and where they are used (never secret values) |
 | `aegis_preview_role` | What one role receives in one repository after all layers merge |
+| `aegis_compose_context` | A repository's `CLAUDE.md` as one developer receives it (repository, teams, role and personal sections), with line counts against a budget and repeated lines. Accepts drafts, so a change can be checked before it is written. |
+| `aegis_list_activity`, `aegis_show_change` | Who changed what, and the diff of one change |
+| `aegis_create_variable`, `aegis_update_variable`, `aegis_delete_variable` | Manage variables. A secret's value can be set but never read back. |
+| `aegis_register_repo`, `aegis_move_repo`, `aegis_unregister_repo` | Map git remotes to repository slugs |
+| `aegis_scan_repo_import`, `aegis_import_repo` | Bring a repository's existing AI files into Aegis |
+
+### Prompts
+
+Workflows you start by name (in Claude Code, `/mcp__aegis__<name>`):
+
+| Prompt | Does |
+|---|---|
+| `add-repo` | Bring a repository's existing AI instructions into Aegis, split across the right layers rather than copied as one long file |
+| `add-guidance` | Decide where one rule belongs (or that it needs no line at all) and add it without duplicating what is there |
+| `health-check` | Explain what developers receive that is too long, repeated or in the wrong layer, and suggest fixes. Applies only the ones you pick. |
+
+Before a change to a `CLAUDE.md`, the model checks what developers will receive, with a subagent where the client has them, so whole files stay out of the main conversation.
 
 Updates and deletes need the etag from the last read. If someone changed the file since, Aegis refuses the change instead of overwriting their work, and the model is told to read the file again.
 

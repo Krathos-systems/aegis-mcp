@@ -92,15 +92,25 @@ func TestListFiles(t *testing.T) {
 func TestToolsReportServerErrors(t *testing.T) {
 	cs := connectTo(t, failing(403, `{"error":"forbidden","required":"editor","held":"reader"}`), "x", false)
 	cases := map[string]map[string]any{
-		"aegis_whoami":         nil,
-		"aegis_list_files":     {"plane": "content"},
-		"aegis_read_file":      {"plane": "content", "path": "a.md"},
-		"aegis_create_file":    {"plane": "content", "path": "a.md", "body": "x"},
-		"aegis_update_file":    {"plane": "content", "path": "a.md", "body": "x", "etag": `"e"`},
-		"aegis_delete_file":    {"plane": "content", "path": "a.md", "etag": `"e"`},
-		"aegis_list_repos":     nil,
-		"aegis_list_variables": nil,
-		"aegis_preview_role":   {"role": "be", "repo": "web"},
+		"aegis_whoami":           nil,
+		"aegis_list_files":       {"plane": "content"},
+		"aegis_read_file":        {"plane": "content", "path": "a.md"},
+		"aegis_create_file":      {"plane": "content", "path": "a.md", "body": "x"},
+		"aegis_update_file":      {"plane": "content", "path": "a.md", "body": "x", "etag": `"e"`},
+		"aegis_delete_file":      {"plane": "content", "path": "a.md", "etag": `"e"`},
+		"aegis_list_repos":       nil,
+		"aegis_list_variables":   nil,
+		"aegis_preview_role":     {"role": "be", "repo": "web"},
+		"aegis_list_activity":    nil,
+		"aegis_show_change":      {"sha": "abc1234"},
+		"aegis_create_variable":  {"name": "A", "kind": "cleartext", "value": "x"},
+		"aegis_update_variable":  {"name": "A", "value": "y"},
+		"aegis_delete_variable":  {"name": "A"},
+		"aegis_register_repo":    {"remote_url": "https://example.com/w.git", "repo": "w"},
+		"aegis_move_repo":        {"id": 1, "repo": "w"},
+		"aegis_unregister_repo":  {"id": 1},
+		"aegis_scan_repo_import": {"id": 1},
+		"aegis_import_repo":      {"id": 1, "sha": strings.Repeat("a", 40)},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -203,11 +213,14 @@ func TestExplain(t *testing.T) {
 		err  *aegis.StatusError
 		want string
 	}{
-		{&aegis.StatusError{Status: 401, Message: "token rejected"}, "Ask the user for a new one"},
+		{&aegis.StatusError{Status: 401, Message: "this API token is not valid"}, "account page"},
 		{&aegis.StatusError{Status: 403, Body: map[string]any{"required": "editor"}}, "holds none"},
 		{&aegis.StatusError{Status: 403, Message: "nope", Body: map[string]any{}}, "not allowed"},
-		{&aegis.StatusError{Status: 404, Message: "file not found"}, "aegis_list_files"},
+		{&aegis.StatusError{Status: 404, Message: "file not found"}, "aegis_list_ tool"},
 		{&aegis.StatusError{Status: 409}, "read it again"},
+		{&aegis.StatusError{Status: 409, Message: "the repository has changed since it was scanned", Body: map[string]any{"sha": "abc"}}, "aegis_scan_repo_import again"},
+		{&aegis.StatusError{Status: 409, Message: "still referenced", Body: map[string]any{"used_in": []any{}}}, "delete it with force"},
+		{&aegis.StatusError{Status: 409, Message: "remote 'x' is already registered"}, "already exists"},
 		{&aegis.StatusError{Status: 402}, "plan limit"},
 		{&aegis.StatusError{Status: 413}, "storage limit"},
 		{&aegis.StatusError{Status: 429}, "wait a minute"},
@@ -249,6 +262,17 @@ func TestNoInternalWordsInWhatClientsSee(t *testing.T) {
 	seen := []string{Instructions, cs.InitializeResult().Instructions}
 	for _, tl := range res.Tools {
 		seen = append(seen, tl.Name, tl.Description)
+	}
+	prompts, err := cs.ListPrompts(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range prompts.Prompts {
+		text, err := getPrompt(t, cs, p.Name, map[string]string{"repo": "r", "guidance": "g"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen = append(seen, p.Name, p.Description, text)
 	}
 	all := strings.ToLower(strings.Join(seen, "\n"))
 	for _, word := range []string{"self-host", "selfhost", "this instance", "this server is run", ".env", "environment variable", "operator"} {
