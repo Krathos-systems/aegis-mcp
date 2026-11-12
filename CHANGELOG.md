@@ -3,6 +3,19 @@
 Each release has a section headed `## <tag> — <date>`. The release workflow
 publishes that section as the release notes and refuses a tag without one.
 
+## v0.1.0-alpha.2 — 2026-11-12
+
+- Works with Aegis API tokens. Make one on your account page under **API tokens**.
+- New tools for everything a token can do: manage variables, register repositories and import their existing files, and read the history of changes.
+- A token limited to collaborator gets only the tools that read.
+- `aegis-mcp setup` names the token it signed in with and when it expires. It explains when it's given a developer API key or a sign-in session instead.
+- The server warns when its token expires within a week.
+- The model now knows where each kind of guidance belongs: the repository, team, role, role-in-repository, personal or global layer, or a skill or setting instead of instructions. It keeps what developers receive short and free of repeats.
+- New tool `aegis_compose_context` shows a repository's `CLAUDE.md` as a developer receives it, with line counts and repeated lines, and checks drafts before they are written.
+- New prompts: `add-repo`, `add-guidance` and `health-check`.
+- The model explains what it is doing in plain words, asks who guidance is for when that is unclear, and shows its plan before changing anything.
+- Creating or updating a Markdown file reports its line count.
+
 ## v0.1.0-alpha.1 — 2026-11-11
 
 First alpha. Needs an Aegis server that accepts admin tokens.
