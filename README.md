@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/aegis-logo-dark.svg">
+  <img alt="Aegis" src="assets/aegis-logo-light.svg" height="56">
+</picture>
+
 # Aegis MCP server
 
 An [MCP](https://modelcontextprotocol.io) server for [Aegis](https://aegis.krathos.systems). It lets an AI client such as Claude Code or Cursor read and change your organisation's Aegis context and configuration (CLAUDE.md instructions, skills, agents, `settings.json` and `mcp.json`) so you don't have to edit them by hand in the Aegis UI.
