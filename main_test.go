@@ -108,6 +108,10 @@ func TestSession(t *testing.T) {
 	if init["serverInfo"].(map[string]any)["name"] != "aegis" || !strings.Contains(init["instructions"].(string), "Where guidance goes") {
 		t.Fatalf("initialize: %v", init)
 	}
+	if got := init["serverInfo"].(map[string]any)["icons"].([]any); len(got) != 2 ||
+		!strings.HasPrefix(got[0].(map[string]any)["src"].(string), "data:image/svg+xml;base64,PHN2Zy") {
+		t.Fatalf("icons: %v", got)
+	}
 	send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
 
 	send(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)

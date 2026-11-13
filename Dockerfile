@@ -9,6 +9,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY main.go ./
+COPY assets/aegis-mark.svg assets/aegis-mark-256.png ./assets/
 COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false \
       -ldflags "-s -w -X main.version=${VERSION}" -o /out/aegis-mcp .

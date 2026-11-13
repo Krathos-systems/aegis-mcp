@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	_ "embed"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,6 +25,19 @@ import (
 	"github.com/Krathos-systems/aegis-mcp/internal/config"
 	"github.com/Krathos-systems/aegis-mcp/internal/setup"
 	"github.com/Krathos-systems/aegis-mcp/internal/tools"
+)
+
+// The Aegis mark, sent to clients that show an icon for a server. Inline as data
+// URIs, so a client never has to fetch it.
+var (
+	//go:embed assets/aegis-mark.svg
+	markSVG []byte
+	//go:embed assets/aegis-mark-256.png
+	markPNG []byte
+	icons   = []mcp.Icon{
+		{Source: "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(markSVG), MIMEType: "image/svg+xml", Sizes: []string{"any"}},
+		{Source: "data:image/png;base64," + base64.StdEncoding.EncodeToString(markPNG), MIMEType: "image/png", Sizes: []string{"256x256"}},
+	}
 )
 
 // version is set at build time with -ldflags "-X main.version=<tag>".
@@ -88,9 +103,11 @@ Flags:
 		cfg.ReadOnly = !canWrite(ctx, client, errw)
 	}
 	server := mcp.NewServer(&mcp.Implementation{
-		Name:    "aegis",
-		Title:   "Aegis",
-		Version: version,
+		Name:       "aegis",
+		Title:      "Aegis",
+		Version:    version,
+		WebsiteURL: "https://aegis.krathos.systems",
+		Icons:      icons,
 	}, &mcp.ServerOptions{Instructions: tools.Instructions})
 	tools.Register(server, client, tools.Options{ReadOnly: cfg.ReadOnly})
 
